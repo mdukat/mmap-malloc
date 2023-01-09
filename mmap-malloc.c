@@ -1,8 +1,49 @@
-#define _GNU_SOURCE
+/*
+ * MIT License
 
-#include <stdio.h>
-#include <sys/mman.h>
-#include <string.h>
+Copyright (c) 2023 Mateusz Dukat
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+*/
+
+#define DEBUG
+
+#ifdef DEBUG
+#include <stdio.h> // fprintf
+#endif
+
+#include <sys/mman.h> // mmap
+#include <string.h> // memcpy (for realloc)
+
+/*
+ * We need to keep in mind what size on which address we allocated.
+ * This is useful for realloc and free, since munmap() needs specified size for deallocation
+ *
+ * Block structure stores:
+ *  - next block in line (linked list)
+ *  - previous block in line
+ *  - pointer we allocated
+ *  - size allocated on this address
+ *
+ * We use NULL for first and last entry in our linked list
+ */
 
 struct Block {
   struct Block *next;
@@ -12,6 +53,10 @@ struct Block {
 };
 
 struct Block *head = NULL;
+
+/*
+ * malloc()
+ */
 
 void *malloc(size_t size)
 {
@@ -59,6 +104,10 @@ void *malloc(size_t size)
   return p;
 }
 
+/*
+ * free()
+ */
+
 void free(void* ptr)
 {
 #ifdef DEBUG
@@ -97,6 +146,10 @@ void free(void* ptr)
   
 }
 
+/*
+ * calloc()
+ */
+
 void *calloc(size_t nmemb, size_t size){
   if(nmemb == 0 || size == 0)
     return NULL;
@@ -108,6 +161,10 @@ void *calloc(size_t nmemb, size_t size){
 #endif
   return p;
 }
+
+/*
+ * realloc()
+ */
 
 void *realloc(void *ptr, size_t size){
   void* newptr = malloc(size);
@@ -133,3 +190,4 @@ void *realloc(void *ptr, size_t size){
 
   return newptr;
 }
+
