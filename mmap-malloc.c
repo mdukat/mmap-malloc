@@ -23,7 +23,7 @@ SOFTWARE.
 
 */
 
-//#define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 #include <stdio.h> // fprintf
@@ -44,6 +44,8 @@ SOFTWARE.
  *  - size allocated on this address
  *
  * We use NULL for first and last entry in our linked list
+ *
+ * Everytime we want to do an operation on our linked list, we need to lock it, so at no time two different threads try to write (or read+write)
  */
 
 struct Block {
@@ -53,8 +55,10 @@ struct Block {
   size_t size;
 };
 
+// Head of Block linked list, initialized in malloc() on first run
 struct Block *head = NULL;
 
+// Mutex lock for Block linked list access, initialized in malloc() on first run
 pthread_mutex_t lock;
 
 /*
@@ -63,17 +67,19 @@ pthread_mutex_t lock;
 
 void *malloc(size_t size)
 {
+  // If specified size is 0, instantly return. Nothing to do.
   if(size == 0)
     return NULL;
 
+  // If Block linked list is initialized, lock it
   if(head != NULL)
     pthread_mutex_lock(&lock);
   
   // Allocate new block
-  void *p = NULL;
-  p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  void *return_pointer = NULL;
+  return_pointer = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 
-  // if it's a first block in memory
+  // if Block linked list is not initialized, initialize it
   if(head == NULL){
     head = mmap(NULL, sizeof(struct Block), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     head->next = NULL;
@@ -81,8 +87,10 @@ void *malloc(size_t size)
     head->ptr = NULL;
     head->size = 0;
 
-    // also init mutex since it's probably first time our code executes
+    // also init mutex since it's first time our code executes
     pthread_mutex_init(&lock, NULL);
+    // and lock it
+    pthread_mutex_lock(&lock);
   }
 
   struct Block *cur = head;
@@ -101,18 +109,18 @@ void *malloc(size_t size)
   cur = new;
   cur->next = NULL;
   cur->size = size;
-  cur->ptr = p;
+  cur->ptr = return_pointer;
+  
+  pthread_mutex_unlock(&lock);
   
 #ifdef DEBUG
-  fprintf(stderr, "malloc(%ld) = %p\n", size, p);
+  fprintf(stderr, "malloc(%ld) = %p\n", size, return_pointer);
 #endif
 
-  pthread_mutex_unlock(&lock);
-
   // Convert mmap error to malloc error
-  if(p == (void *) -1)
+  if(return_pointer == (void *) -1)
     return NULL;
-  return p;
+  return return_pointer;
 }
 
 /*
@@ -124,6 +132,8 @@ void free(void* ptr)
 #ifdef DEBUG
   fprintf(stderr, "free(%p)\n", ptr);
 #endif
+
+  // Instantly return if ptr is NULL, nothing to do
   if(ptr == NULL)
     return;
   
@@ -131,54 +141,66 @@ void free(void* ptr)
 
   struct Block *cur = head;
   
+  // Find block with pointer we want to free()
   while(cur->ptr != ptr){
     cur = cur->next;
   }
 
-  //fprintf(stderr, "Would free: %ld bytes\n", cur->size);
+  //   Remove this block
 
-  // Remove this block
+  // Find previous block, forget about current one, make next one, the next one
   struct Block *prev;
   if(cur->prev != NULL){
     prev = cur->prev;
     prev->next = cur->next;
   }else{
+    // If we want to free() head block, simply make head the next one
     head = cur->next;
   }
 
+  // Find next block, forget about current one, make previous one, the previous one
   struct Block *next;
   if(cur->next != NULL){
     next = cur->next;
     next->prev = cur->prev;
   }else{
+    // If it's the last block, make previous one last
     prev->next = NULL;
   }
-
-  munmap(cur->ptr, cur->size);
-  munmap(cur, sizeof(struct Block));
   
   pthread_mutex_unlock(&lock);
-  
+
+  // deallocate *ptr address and block structure
+  munmap(cur->ptr, cur->size);
+  munmap(cur, sizeof(struct Block));
 }
 
 /*
  * calloc()
+ *
+ * Fancy malloc() with number of members
  */
 
 void *calloc(size_t nmemb, size_t size){
+  // Return NULL if any of the values are equal 0
   if(nmemb == 0 || size == 0)
     return NULL;
 
+  // Call malloc() with real size we want to allocate
   size_t realsize = nmemb * size;
-  void *p = malloc(realsize);
+  void *return_pointer = malloc(realsize);
+
 #ifdef DEBUG
-  fprintf(stderr, "calloc(%ld, %ld) = %p\n", nmemb, size, p);
+  fprintf(stderr, "calloc(%ld, %ld) = %p\n", nmemb, size, return_pointer);
 #endif
-  return p;
+
+  return return_pointer;
 }
 
 /*
  * realloc()
+ *
+ * Allocate new memory space, copy data from old space, deallocate old address
  */
 
 void *realloc(void *ptr, size_t size){
@@ -188,9 +210,8 @@ void *realloc(void *ptr, size_t size){
   fprintf(stderr, "realloc(%p, %ld) = %p\n", ptr, size, newptr);
 #endif
 
-  if(ptr == NULL){
+  if(ptr == NULL)
     return newptr;
-  }
   
   pthread_mutex_lock(&lock);
 
@@ -199,10 +220,10 @@ void *realloc(void *ptr, size_t size){
   while(old->ptr != ptr)
     old = old->next;
   
+  pthread_mutex_unlock(&lock);
+
   // copy last block to new block
   memcpy(newptr, ptr, old->size);
-  
-  pthread_mutex_unlock(&lock);
 
   // free old block
   free(ptr);
