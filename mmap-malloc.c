@@ -23,7 +23,7 @@ SOFTWARE.
 
 */
 
-#define DEBUG
+//#define DEBUG
 
 #ifdef DEBUG
 #include <stdio.h> // fprintf
@@ -31,6 +31,7 @@ SOFTWARE.
 
 #include <sys/mman.h> // mmap
 #include <string.h> // memcpy (for realloc)
+#include <pthread.h> // pthread_mutex
 
 /*
  * We need to keep in mind what size on which address we allocated.
@@ -54,6 +55,8 @@ struct Block {
 
 struct Block *head = NULL;
 
+pthread_mutex_t lock;
+
 /*
  * malloc()
  */
@@ -63,40 +66,48 @@ void *malloc(size_t size)
   if(size == 0)
     return NULL;
 
+  if(head != NULL)
+    pthread_mutex_lock(&lock);
+  
   // Allocate new block
   void *p = NULL;
   p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+
+  // if it's a first block in memory
+  if(head == NULL){
+    head = mmap(NULL, sizeof(struct Block), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    head->next = NULL;
+    head->prev = NULL;
+    head->ptr = NULL;
+    head->size = 0;
+
+    // also init mutex since it's probably first time our code executes
+    pthread_mutex_init(&lock, NULL);
+  }
+
+  struct Block *cur = head;
+  
+  // step to last block
+  while(cur->next != NULL){
+    cur = cur->next;
+  }
+
+  // make new block
+  struct Block *new = mmap(NULL, sizeof(struct Block), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  cur->next = new;
+  new->prev = cur;
+
+  // switch to next block
+  cur = new;
+  cur->next = NULL;
+  cur->size = size;
+  cur->ptr = p;
+  
 #ifdef DEBUG
   fprintf(stderr, "malloc(%ld) = %p\n", size, p);
 #endif
 
-  // Add block definiton
-  if(head == NULL){
-    // if it's a first block in memory
-    head = mmap(NULL, sizeof(struct Block), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    head->next = NULL;
-    head->prev = NULL;
-    head->ptr = p;
-    head->size = size;
-  }else{
-    // if head exists
-    struct Block *cur = head;
-    
-    // step to last block
-    while(cur->next != NULL){
-      cur = cur->next;
-    }
-
-    // make new block
-    struct Block *new = mmap(NULL, sizeof(struct Block), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    cur->next = new;
-    new->prev = cur;
-    cur = new;
-    cur->next = NULL;
-    cur->size = size;
-    cur->ptr = p;
-  }
-
+  pthread_mutex_unlock(&lock);
 
   // Convert mmap error to malloc error
   if(p == (void *) -1)
@@ -116,6 +127,8 @@ void free(void* ptr)
   if(ptr == NULL)
     return;
   
+  pthread_mutex_lock(&lock);
+
   struct Block *cur = head;
   
   while(cur->ptr != ptr){
@@ -143,6 +156,8 @@ void free(void* ptr)
 
   munmap(cur->ptr, cur->size);
   munmap(cur, sizeof(struct Block));
+  
+  pthread_mutex_unlock(&lock);
   
 }
 
@@ -177,6 +192,8 @@ void *realloc(void *ptr, size_t size){
     return newptr;
   }
   
+  pthread_mutex_lock(&lock);
+
   //find old block
   struct Block *old = head;
   while(old->ptr != ptr)
@@ -184,6 +201,8 @@ void *realloc(void *ptr, size_t size){
   
   // copy last block to new block
   memcpy(newptr, ptr, old->size);
+  
+  pthread_mutex_unlock(&lock);
 
   // free old block
   free(ptr);
