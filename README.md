@@ -13,6 +13,10 @@ make
 LD_PRELOAD="./mmap-malloc.so" java -jar server.jar --nogui
 ```
 
+## Benchmark
+
+See [Benchmark.md](/benchmark.md)
+
 ## Current problems
 
  - Slow (I guess it's due to mutex locking for Block linked list, maybe `MAP_ANONYMOUS` mmap() calls)
